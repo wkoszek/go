@@ -42,6 +42,12 @@ Open a web browser displaying annotated source code:
 Write out an HTML file instead of launching a web browser:
 	go tool cover -html=c.out -o coverage.html
 
+Display annotated source code in the terminal with ANSI colors:
+	go tool cover -text=c.out
+
+Write out a plain-text file instead of printing to stdout:
+	go tool cover -text=c.out -o coverage.txt
+
 Display coverage percentages to stdout for each function:
 	go tool cover -func=c.out
 
@@ -62,7 +68,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, usageMessage)
 	fmt.Fprintln(os.Stderr, "\nFlags:")
 	flag.PrintDefaults()
-	fmt.Fprintln(os.Stderr, "\n  Only one of -html, -func, or -mode may be set.")
+	fmt.Fprintln(os.Stderr, "\n  Only one of -html, -text, -func, or -mode may be set.")
 	os.Exit(2)
 }
 
@@ -72,6 +78,11 @@ var (
 	output           = flag.String("o", "", "file for output")
 	outfilelist      = flag.String("outfilelist", "", "file containing list of output files (one per line) if -pkgcfg is in use")
 	htmlOut          = flag.String("html", "", "generate HTML representation of coverage profile")
+	textOut          = flag.String("text", "", "generate plain-text representation of coverage profile")
+	textColor        = flag.Bool("color", true, "use ANSI colors in text output")
+	textLines        = flag.Bool("lines", true, "show line numbers in text output")
+	textHits         = flag.Bool("hits", true, "show execution counts in text output")
+	textSummary      = flag.Bool("summary", false, "show only summary table, no source")
 	funcOut          = flag.String("func", "", "output coverage profile information for each function")
 	pkgcfg           = flag.String("pkgcfg", "", "enable full-package instrumentation mode using params from specified config file")
 	pkgconfig        covcmd.CoverPkgConfig
@@ -115,9 +126,11 @@ func main() {
 		return
 	}
 
-	// Output HTML or function coverage information.
+	// Output HTML, text, or function coverage information.
 	if *htmlOut != "" {
 		err = htmlOutput(profile, *output)
+	} else if *textOut != "" {
+		err = textOutput(profile, *output)
 	} else {
 		err = funcOutput(profile, *output)
 	}
@@ -131,6 +144,12 @@ func main() {
 // parseFlags sets the profile and counterStmt globals and performs validations.
 func parseFlags() error {
 	profile = *htmlOut
+	if *textOut != "" {
+		if profile != "" {
+			return fmt.Errorf("too many options")
+		}
+		profile = *textOut
+	}
 	if *funcOut != "" {
 		if profile != "" {
 			return fmt.Errorf("too many options")
