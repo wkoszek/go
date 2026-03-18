@@ -1,0 +1,16 @@
+// START f
+      1| 13| 	ch := make(chan int)
+      1| 14| 	select {
+      0| 15| 	case <-ch:
+      1| 16| 	default:
+       | 17| 	}
+       | 18| }
+       | 19|
+       | 20| // END f
+// START g
+      1| 25| 	if false {
+      0| 26| 		fmt.Printf("Hello")
+      0| 27| 	}
+       | 28| }
+       | 29|
+       | 30| // END g

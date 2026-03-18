@@ -1,0 +1,18 @@
+// START f
+func f() {
+	ch := make(chan int)
+	select {
+	case <-ch:
+	default:
+	}
+}
+
+// END f
+// START g
+func g() {
+	if false {
+		fmt.Printf("Hello")
+	}
+}
+
+// END g

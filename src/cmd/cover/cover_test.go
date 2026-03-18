@@ -116,6 +116,18 @@ func TestCoverWithToolExec(t *testing.T) {
 	t.Run("CoverHTML", func(t *testing.T) {
 		testCoverHTML(t, toolexecArg)
 	})
+	t.Run("CoverText", func(t *testing.T) {
+		testCoverText(t, toolexecArg)
+	})
+	t.Run("CoverTextSummary", func(t *testing.T) {
+		testCoverTextSummary(t, toolexecArg)
+	})
+	t.Run("CoverTextColor", func(t *testing.T) {
+		testCoverTextColor(t, toolexecArg)
+	})
+	t.Run("CoverTextGutter", func(t *testing.T) {
+		testCoverTextGutter(t, toolexecArg)
+	})
 	t.Run("HtmlUnformatted", func(t *testing.T) {
 		testHtmlUnformatted(t, toolexecArg)
 	})
@@ -417,6 +429,237 @@ func testCoverHTML(t *testing.T, toolexecArg string) {
 	}
 	if len(goldenLines) != len(outLines) {
 		t.Fatalf("output longer than golden; first extra output line %d: %q\n", len(goldenLines)+1, outLines[len(goldenLines)])
+	}
+}
+
+// testCoverText tests the -text flag with -color=false -hits=false -lines=false,
+// extracting marked sections and comparing against a golden file.
+func testCoverText(t *testing.T, toolexecArg string) {
+	testenv.MustHaveGoRun(t)
+	dir := tempDir(t)
+
+	t.Parallel()
+
+	// go test -coverprofile text.cov cmd/cover/testdata/text
+	textProfile := filepath.Join(dir, "text.cov")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-coverprofile", textProfile, "cmd/cover/testdata/text")
+	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
+	run(cmd, t)
+
+	// testcover -text text.cov -color=false -hits=false -lines=false -o text.txt
+	textOut := filepath.Join(dir, "text.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-color=false", "-hits=false", "-lines=false", "-o", textOut)
+	run(cmd, t)
+
+	// Extract the parts between comment markers and compare against golden.
+	entireText, err := os.ReadFile(textOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	scan := bufio.NewScanner(bytes.NewReader(entireText))
+	in := false
+	for scan.Scan() {
+		line := scan.Text()
+		if strings.Contains(line, "// START") {
+			in = true
+		}
+		if in {
+			fmt.Fprintln(&out, line)
+		}
+		if strings.Contains(line, "// END") {
+			in = false
+		}
+	}
+	if scan.Err() != nil {
+		t.Error(scan.Err())
+	}
+	textGolden := filepath.Join(testdata, "text", "text_nocolor.golden")
+	golden, err := os.ReadFile(textGolden)
+	if err != nil {
+		t.Fatalf("reading golden file: %v", err)
+	}
+	goldenLines := strings.Split(string(golden), "\n")
+	outLines := strings.Split(out.String(), "\n")
+	for i, goldenLine := range goldenLines {
+		if i >= len(outLines) {
+			t.Fatalf("output shorter than golden; stops before line %d: %s\n", i+1, goldenLine)
+		}
+		goldenLine = strings.Join(strings.Fields(goldenLine), " ")
+		outLine := strings.Join(strings.Fields(outLines[i]), " ")
+		if outLine != goldenLine {
+			t.Fatalf("line %d differs: got:\n\t%s\nwant:\n\t%s", i+1, outLine, goldenLine)
+		}
+	}
+	if len(goldenLines) != len(outLines) {
+		t.Fatalf("output longer than golden; first extra output line %d: %q\n", len(goldenLines)+1, outLines[len(goldenLines)])
+	}
+}
+
+// testCoverTextSummary tests the -text -summary flag produces a valid summary table.
+func testCoverTextSummary(t *testing.T, toolexecArg string) {
+	testenv.MustHaveGoRun(t)
+	dir := tempDir(t)
+
+	t.Parallel()
+
+	textProfile := filepath.Join(dir, "text.cov")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-coverprofile", textProfile, "cmd/cover/testdata/text")
+	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
+	run(cmd, t)
+
+	// testcover -text text.cov -color=false -summary
+	textOut := filepath.Join(dir, "summary.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-color=false", "-summary", "-o", textOut)
+	run(cmd, t)
+
+	data, err := os.ReadFile(textOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+
+	// Summary must contain a header, a TOTAL line, and no source code.
+	if !strings.Contains(output, "File") || !strings.Contains(output, "Stmts") {
+		t.Fatal("summary missing table header")
+	}
+	if !strings.Contains(output, "TOTAL") {
+		t.Fatal("summary missing TOTAL line")
+	}
+	if !strings.Contains(output, "75.0%") {
+		t.Fatalf("summary missing expected coverage percentage; got:\n%s", output)
+	}
+	// Summary should NOT contain source code.
+	if strings.Contains(output, "func f()") || strings.Contains(output, "package text") {
+		t.Fatal("summary should not contain source code")
+	}
+	// Summary should contain the missing lines column.
+	if !strings.Contains(output, "Missing") {
+		t.Fatal("summary missing 'Missing' column")
+	}
+}
+
+// testCoverTextColor tests that -text output with colors contains ANSI escape sequences.
+func testCoverTextColor(t *testing.T, toolexecArg string) {
+	testenv.MustHaveGoRun(t)
+	dir := tempDir(t)
+
+	t.Parallel()
+
+	textProfile := filepath.Join(dir, "text.cov")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-coverprofile", textProfile, "cmd/cover/testdata/text")
+	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
+	run(cmd, t)
+
+	// testcover -text text.cov (color=true is default)
+	textOut := filepath.Join(dir, "color.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-hits=false", "-lines=false", "-o", textOut)
+	run(cmd, t)
+
+	data, err := os.ReadFile(textOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+
+	// Must contain ANSI escape sequences.
+	if !strings.Contains(output, "\033[") {
+		t.Fatal("colored output missing ANSI escape sequences")
+	}
+	// Must contain the reset sequence.
+	if !strings.Contains(output, "\033[0m") {
+		t.Fatal("colored output missing ANSI reset sequence")
+	}
+	// Must contain covered color (cov8 = rgb(44, 212, 149)).
+	if !strings.Contains(output, "\033[38;2;44;212;149m") {
+		t.Fatal("colored output missing covered color (cov8)")
+	}
+	// Must contain uncovered color (cov0 = rgb(192, 0, 0)).
+	if !strings.Contains(output, "\033[38;2;192;0;0m") {
+		t.Fatal("colored output missing uncovered color (cov0)")
+	}
+
+	// Now test -color=false produces no ANSI escapes.
+	nocolorOut := filepath.Join(dir, "nocolor.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-color=false", "-o", nocolorOut)
+	run(cmd, t)
+
+	data, err = os.ReadFile(nocolorOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "\033[") {
+		t.Fatal("-color=false output should not contain ANSI escape sequences")
+	}
+}
+
+// testCoverTextGutter tests that -text output with -lines and -hits shows
+// line numbers and execution counts.
+func testCoverTextGutter(t *testing.T, toolexecArg string) {
+	testenv.MustHaveGoRun(t)
+	dir := tempDir(t)
+
+	t.Parallel()
+
+	textProfile := filepath.Join(dir, "text.cov")
+	cmd := testenv.Command(t, testenv.GoToolPath(t), "test", toolexecArg, "-coverprofile", textProfile, "cmd/cover/testdata/text")
+	cmd.Env = append(cmd.Environ(), "CMDCOVER_TOOLEXEC=true")
+	run(cmd, t)
+
+	// testcover -text text.cov -color=false (lines=true, hits=true by default)
+	textOut := filepath.Join(dir, "gutter.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-color=false", "-o", textOut)
+	run(cmd, t)
+
+	data, err := os.ReadFile(textOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+
+	// Must contain line numbers with pipe separators.
+	lineNumRe := regexp.MustCompile(`\|\s+\d+\| `)
+	if !lineNumRe.MatchString(output) {
+		t.Fatal("gutter output missing line numbers")
+	}
+	// Must contain hit count of 0 for uncovered line (case <-ch).
+	hitZeroRe := regexp.MustCompile(`\s+0\|\s+15\|`)
+	if !hitZeroRe.MatchString(output) {
+		t.Fatalf("gutter output missing hit count of 0; got:\n%s", output)
+	}
+	// Must contain hit count of 1 for covered line.
+	hitOneRe := regexp.MustCompile(`\s+1\|\s+13\|`)
+	if !hitOneRe.MatchString(output) {
+		t.Fatalf("gutter output missing hit count of 1; got:\n%s", output)
+	}
+
+	// With -hits=false, output should not have hit count column.
+	nohitsOut := filepath.Join(dir, "nohits.txt")
+	cmd = testenv.Command(t, testcover(t), "-text", textProfile, "-color=false", "-hits=false", "-o", nohitsOut)
+	run(cmd, t)
+
+	data, err = os.ReadFile(nohitsOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nohitsOutput := string(data)
+	// Should still have line numbers.
+	if !lineNumRe.MatchString(nohitsOutput) {
+		t.Fatal("-hits=false output missing line numbers")
+	}
+	// With hits, source lines look like "      1|  13| code" (two pipe columns).
+	// Without hits, they look like " 13| code" (one pipe column).
+	// Verify no source line has the hits gutter pattern.
+	for _, line := range strings.Split(nohitsOutput, "\n") {
+		// Skip non-source lines (table header, separator, file marker).
+		if !strings.Contains(line, "| ") {
+			continue
+		}
+		// A line with hits has format: <spaces><count>| <spaces><linenum>| <code>
+		// Count the number of "| " separators; with hits there are 2, without just 1.
+		if strings.Count(line, "| ") > 1 {
+			t.Fatalf("-hits=false output has hit count column in line: %q", line)
+		}
 	}
 }
 
